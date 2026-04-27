@@ -1,11 +1,23 @@
+# =====================================================
+# PROJECT: Quelccaya Ice Cap (Peru) Glacier Surface Area Change Detection
+# AUTHOR: David A. Olaechea Dongo
+# DESCRIPTION:
+# Quantify long-term glacier surface area change at the Quelccaya Ice Cap (Peru)
+# using Landsat satellite imagery and Google Earth Engine from 1990 to 2024. 
+# =====================================================
+
 import os
 import requests
 import imageio.v2 as imageio
 
 import ee
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 
+from PIL import Image
+from io import BytesIO
+from matplotlib.patches import Rectangle
 
 # =====================================================
 # 1. INITIALISE EARTH ENGINE
@@ -169,8 +181,126 @@ df.to_csv(csv_path, index=False)
 
 
 # =====================================================
-# 7. PLOT AREA CHANGE
+# 7. CREATE VISUAL OUTPUTS
 # =====================================================
+
+def get_true_color_with_glacier_overlay(year):
+    image = get_landsat_collection(year).median().clip(roi)
+
+    if year < 2013:
+        rgb_bands = ["SR_B3", "SR_B2", "SR_B1"]  # Landsat 5/7 true color
+    else:
+        rgb_bands = ["SR_B4", "SR_B3", "SR_B2"]  # Landsat 8 true color
+
+    glacier = create_glacier_mask(year).selfMask()
+
+    true_color = image.visualize(
+        bands=rgb_bands,
+        min=0.02,
+        max=0.35,
+        gamma=1.2
+    )
+
+    glacier_overlay = glacier.visualize(
+        palette=["00FFFF"],
+        opacity=0.6
+    )
+
+    combined = true_color.blend(glacier_overlay)
+
+    url = combined.getThumbURL({
+        "region": roi,
+        "dimensions": 900,
+        "format": "png"
+    })
+
+    response = requests.get(url)
+    response.raise_for_status()
+
+    return Image.open(BytesIO(response.content))
+
+
+def add_map_elements(ax, label_text="Detected glacier/snow-covered area"):
+    # Coordinate grid
+    lon_min, lon_max = -70.90, -70.70
+    lat_min, lat_max = -14.00, -13.83
+
+    height, width = ax.images[0].get_array().shape[:2]
+
+    ax.set_xlim(0, width)
+    ax.set_ylim(height, 0)
+
+    lon_ticks = np.linspace(lon_min, lon_max, 5)
+    lat_ticks = np.linspace(lat_min, lat_max, 5)
+
+    x_ticks = np.linspace(0, width, 5)
+    y_ticks = np.linspace(height, 0, 5)
+
+    ax.set_xticks(x_ticks)
+    ax.set_yticks(y_ticks)
+
+    ax.set_xticklabels([f"{abs(lon):.2f}°W" for lon in lon_ticks], fontsize=8)
+    ax.set_yticklabels([f"{abs(lat):.2f}°S" for lat in lat_ticks], fontsize=8)
+
+    ax.grid(color="white", linestyle="--", linewidth=0.6, alpha=0.7)
+
+    # Legend box
+    legend_x = 0.04
+    legend_y = 0.05
+    legend_size = 0.05
+
+    legend_patch = Rectangle(
+        (legend_x, legend_y),
+        legend_size,
+        legend_size,
+        transform=ax.transAxes,
+        facecolor="#00FFFF",
+        edgecolor="black"
+    )
+    ax.add_patch(legend_patch)
+
+    ax.text(
+        legend_x + legend_size + 0.015,
+        legend_y + legend_size / 2,
+        label_text,
+        transform=ax.transAxes,
+        fontsize=9,
+        va="center",
+        ha="left",
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none")
+    )
+    # North arrow
+    ax.annotate(
+        "N",
+        xy=(0.92, 0.88),
+        xytext=(0.92, 0.72),
+        xycoords="axes fraction",
+        arrowprops=dict(facecolor="black", width=4, headwidth=12),
+        ha="center",
+        va="center",
+        fontsize=12,
+        fontweight="bold"
+    )
+
+    # Scale bar
+    ax.plot(
+        [0.08, 0.28],
+        [0.92, 0.92],
+        transform=ax.transAxes,
+        color="black",
+        linewidth=4
+    )
+
+    ax.text(
+        0.18, 0.89,
+        "~5 km",
+        transform=ax.transAxes,
+        ha="center",
+        fontsize=9,
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none")
+    )
+
+    ax.margins(0)
 
 plt.figure(figsize=(10, 6))
 
@@ -207,6 +337,33 @@ figure_path = os.path.join(
 plt.savefig(figure_path, dpi=300)
 plt.show()
 
+img_1990 = get_true_color_with_glacier_overlay(1990)
+img_2024 = get_true_color_with_glacier_overlay(2024)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+
+axes[0].imshow(img_1990)
+axes[0].set_title("1990")
+add_map_elements(axes[0])
+
+axes[1].imshow(img_2024)
+axes[1].set_title("2024")
+add_map_elements(axes[1])
+
+plt.suptitle("Quelccaya Ice Cap: True Color Satellite Image with Glacier Mask Overlay")
+
+plt.tight_layout()
+
+plt.subplots_adjust(bottom=0.05)
+
+before_after_path = os.path.join(
+    OUTPUT_FOLDER,
+    "quelccaya_before_after_true_color.png"
+)
+
+plt.savefig(before_after_path, dpi=300)
+
+plt.show()
 
 # =====================================================
 # 8. EXPORT GLACIER MASK FRAMES
@@ -262,9 +419,10 @@ gif_path = os.path.join(
 imageio.mimsave(
     gif_path,
     images,
-    duration=3
+    duration=5
 )
 
 print(f"CSV saved to: {csv_path}")
 print(f"Figure saved to: {figure_path}")
 print(f"GIF saved to: {gif_path}")
+print(f"Before/after figure saved to: {before_after_path}")
